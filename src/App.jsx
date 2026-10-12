@@ -39,14 +39,22 @@ async function compactStoredPhoto(photo) { try { const blob = await fetch(photo)
 function App() {
   const [plans, setPlans] = useState(readPlans);
   const [workouts, setWorkouts] = useState(readWorkouts);
+  const workoutsRef = useRef(workouts);
   const [showNew, setShowNew] = useState(false);
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState('');
   const [darkMode, setDarkMode] = useState(() => { try { return localStorage.getItem('gym-theme') === 'dark'; } catch { return false; } });
   const navigate = useNavigate();
+  function saveWorkouts(update) {
+    const next = typeof update === 'function' ? update(workoutsRef.current) : update;
+    workoutsRef.current = next;
+    try { localStorage.setItem('gym-workouts', JSON.stringify(next)); }
+    catch { setToast('Spazio esaurito sul dispositivo: libera spazio e riprova'); }
+    setWorkouts(next);
+  }
   useEffect(() => { const theme = darkMode ? 'dark' : 'light'; document.documentElement.dataset.theme = theme; try { localStorage.setItem('gym-theme', theme); } catch {} }, [darkMode]);
   useEffect(() => { try { localStorage.setItem('gym-plans', JSON.stringify(plans)); } catch { setToast('Spazio foto esaurito sul dispositivo: rimuovi qualche foto e riprova'); } }, [plans]);
-  useEffect(() => { try { localStorage.setItem('gym-workouts', JSON.stringify(workouts)); } catch { setToast('Spazio esaurito sul dispositivo: libera spazio e riprova'); } }, [workouts]);
+  useEffect(() => { workoutsRef.current = workouts; try { localStorage.setItem('gym-workouts', JSON.stringify(workouts)); } catch { setToast('Spazio esaurito sul dispositivo: libera spazio e riprova'); } }, [workouts]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -54,7 +62,7 @@ function App() {
       const cleanedWorkouts = workouts.map((workout) => ({ ...workout, exercises: workout.exercises.map(({ photo, ...exercise }) => exercise) }));
       if (cancelled) return;
       setPlans((current) => current.map((plan) => { const oldPlan = plans.find((item) => item.id === plan.id); const newPlan = optimized.find((item) => item.id === plan.id); if (!oldPlan || !newPlan) return plan; return { ...plan, exercises: plan.exercises.map((exercise) => { const oldExercise = oldPlan.exercises.find((item) => item.id === exercise.id); const newExercise = newPlan.exercises.find((item) => item.id === exercise.id); return oldExercise && newExercise && exercise.photo === oldExercise.photo ? { ...exercise, photo: newExercise.photo } : exercise; }) }; }));
-      setWorkouts((current) => current.map((workout) => { const cleaned = cleanedWorkouts.find((item) => item.id === workout.id); return cleaned ? { ...workout, exercises: workout.exercises.map(({ photo, ...exercise }) => exercise) } : workout; }));
+      saveWorkouts((current) => current.map((workout) => { const cleaned = cleanedWorkouts.find((item) => item.id === workout.id); return cleaned ? { ...workout, exercises: workout.exercises.map(({ photo, ...exercise }) => exercise) } : workout; }));
     })();
     return () => { cancelled = true; };
   }, []);
@@ -68,11 +76,11 @@ function App() {
   function startWorkout(plan) {
     const previous = workouts.find((w) => w.planId === plan.id && w.finishedAt);
     const workout = { id: uid(), planId: plan.id, planName: plan.name, restSeconds: Number(plan.restSeconds) || 90, startedAt: new Date().toISOString(), finishedAt: null, exercises: plan.exercises.map((exercise) => { const old = previous?.exercises.find((e) => e.id === exercise.id || e.name === exercise.name); return { id: exercise.id, name: exercise.name, notes: exercise.notes || '', sets: Array.from({ length: Math.max(1, Number(exercise.sets) || 1) }, (_, i) => { const last = old?.sets[i] || old?.sets.at(-1); return { reps: String(last?.reps || exercise.reps || '10'), kg: String(last?.kg ?? exercise.kg ?? 0), done: false }; }) }; }) };
-    setWorkouts((old) => [workout, ...old]); navigate(`/allenamento/${workout.id}`);
+    saveWorkouts((old) => [workout, ...old]); navigate(`/allenamento/${workout.id}`);
   }
   function importBackup(data) {
     setPlans((current) => { const merged = new Map(current.map((p) => [p.id, p])); data.plans.forEach((p) => merged.set(p.id, p)); return [...merged.values()]; });
-    setWorkouts((current) => { const merged = new Map(current.map((w) => [w.id, w])); (data.workouts || []).forEach((w) => merged.set(w.id, w)); return [...merged.values()]; });
+    saveWorkouts((current) => { const merged = new Map(current.map((w) => [w.id, w])); (data.workouts || []).forEach((w) => merged.set(w.id, w)); return [...merged.values()]; });
   }
 
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
@@ -81,7 +89,7 @@ function App() {
       <Route path="/" element={<Home plans={plans} workouts={workouts} onResume={(w) => navigate(`/allenamento/${w.id}`)} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
       <Route path="/schede" element={<Library plans={plans} search={search} setSearch={setSearch} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} />} />
       <Route path="/schede/:id" element={<PlanEditor plans={plans} updatePlan={updatePlan} onStart={startWorkout} onBack={() => navigate('/schede')} onToast={setToast}/>} />
-      <Route path="/allenamento/:id" element={<WorkoutSession plans={plans} workouts={workouts} setWorkouts={setWorkouts} onBack={() => navigate('/schede')}/>} />
+      <Route path="/allenamento/:id" element={<WorkoutSession plans={plans} workouts={workouts} setWorkouts={saveWorkouts} onBack={() => navigate('/schede')}/>} />
       <Route path="/profilo" element={<Profile plans={plans} workouts={workouts} onToast={setToast} onImport={importBackup} darkMode={darkMode} onToggleDarkMode={setDarkMode}/>} />
       <Route path="*" element={<Home plans={plans} workouts={workouts} onResume={(w) => navigate(`/allenamento/${w.id}`)} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
     </Routes></main>
@@ -164,12 +172,18 @@ function WorkoutSession({ plans, workouts, setWorkouts, onBack, onToast }) {
   if (!workout) return <div className="empty"><h3>Allenamento non trovato</h3><button className="button button-lime" onClick={onBack}>Torna alle schede</button></div>;
   function changeSet(eid, index, patch) { setWorkouts((old) => old.map((w) => w.id === id ? { ...w, exercises: w.exercises.map((e) => e.id === eid ? { ...e, sets: e.sets.map((s, i) => i === index ? { ...s, ...patch } : s) } : e) } : w)); }
   function toggleSet(ei, si) {
-    const exercise = workout.exercises[ei]; const nextSets = exercise.sets.map((set, i) => i === si ? { ...set, done: !set.done } : set);
-    const next = { ...workout, exercises: workout.exercises.map((item, i) => i === ei ? { ...item, sets: nextSets } : item) };
-    const isLastSet = ei === workout.exercises.length - 1 && si === exercise.sets.length - 1;
-    if (nextSets[si].done && !exercise.sets[si].done && !isLastSet) { const seconds = Number(workout.restSeconds) || 90; next.restUntil = Date.now() + seconds * 1000; next.restPausedSeconds = 0; next.restDurationSeconds = seconds; next.restAfter = { exerciseId: exercise.id, setIndex: si }; }
-    else if (!nextSets[si].done && workout.restAfter?.exerciseId === exercise.id && workout.restAfter?.setIndex === si) { next.restUntil = null; next.restPausedSeconds = 0; next.restAfter = null; }
-    setWorkouts((old) => old.map((w) => w.id === id ? next : w));
+    setWorkouts((old) => old.map((current) => {
+      if (current.id !== id) return current;
+      const exercise = current.exercises[ei];
+      if (!exercise?.sets[si]) return current;
+      const wasDone = exercise.sets[si].done;
+      const nextSets = exercise.sets.map((set, index) => index === si ? { ...set, done: !set.done } : set);
+      const next = { ...current, exercises: current.exercises.map((item, index) => index === ei ? { ...item, sets: nextSets } : item) };
+      const isLastSet = ei === current.exercises.length - 1 && si === exercise.sets.length - 1;
+      if (!wasDone && !isLastSet) { const seconds = Number(current.restSeconds) || 90; next.restUntil = Date.now() + seconds * 1000; next.restPausedSeconds = 0; next.restDurationSeconds = seconds; next.restAfter = { exerciseId: exercise.id, setIndex: si }; }
+      else if (wasDone && current.restAfter?.exerciseId === exercise.id && current.restAfter?.setIndex === si) { next.restUntil = null; next.restPausedSeconds = 0; next.restAfter = null; }
+      return next;
+    }));
   }
   function pauseOrResume() {
     if (workout.restUntil) patchWorkout({ restUntil: null, restPausedSeconds: remaining });
