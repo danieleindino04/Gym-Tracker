@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, Route, Routes, useNavigate, useParams } from 'react-router';
 import { Activity, ArrowLeft, ArrowRight, CalendarDays, Check, ChevronRight, CirclePlus, Dumbbell, Ellipsis, Flame, Plus, Search, Settings2, Sparkles, Trash2, TrendingUp, X } from 'lucide-react';
 
@@ -39,7 +39,7 @@ function App() {
       <Route path="/" element={<Home plans={plans} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
       <Route path="/schede" element={<Library plans={plans} search={search} setSearch={setSearch} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} />} />
       <Route path="/schede/:id" element={<PlanEditor plans={plans} updatePlan={updatePlan} onBack={() => navigate('/schede')} onToast={setToast}/>} />
-      <Route path="/profilo" element={<Profile plans={plans} onToast={setToast}/>} />
+      <Route path="/profilo" element={<Profile plans={plans} onToast={setToast} onImport={(incoming) => setPlans((current) => { const merged = new Map(current.map((p) => [p.id, p])); incoming.forEach((p) => merged.set(p.id, p)); return [...merged.values()]; })}/>} />
       <Route path="*" element={<Home plans={plans} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
     </Routes></main>
     <nav className="bottom-nav"><NavLink to="/" end><Activity size={19}/><span>Oggi</span></NavLink><NavLink to="/schede"><Dumbbell size={19}/><span>Schede</span></NavLink><NavLink to="/profilo"><Settings2 size={19}/><span>Profilo</span></NavLink></nav>
@@ -92,6 +92,22 @@ function AddExercise({onClose,onAdd}) { const [value,setValue] = useState(''); c
 
 function NewPlan({onClose,onCreate}) { const [name,setName]=useState(''); return <div className="modal-backdrop" onMouseDown={(e) => {if(e.target === e.currentTarget) onClose();}}><form className="sheet-modal new-modal" onSubmit={(e) => {e.preventDefault(); if(name.trim()) onCreate(name.trim());}}><div className="modal-handle"/><div className="modal-head"><div><p className="eyebrow">NUOVO PROGRAMMA</p><h2>Crea una scheda</h2></div><button type="button" className="icon-button" onClick={onClose}><X size={19}/></button></div><p className="modal-description">Dai un nome al tuo allenamento. Potrai aggiungere gli esercizi subito dopo.</p><label className="input-label">NOME DELLA SCHEDA<input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Es. Push day" maxLength={32}/></label><button className="button button-lime full modal-done" disabled={!name.trim()}>Crea scheda <ArrowRight size={17}/></button></form></div>; }
 
-function Profile({plans,onToast}) { return <><div className="page-heading"><p className="eyebrow">IL TUO ACCOUNT</p><h1>Profilo<span className="brand-dot">.</span></h1></div><div className="profile-card"><span className="profile-avatar">D</span><div><strong>Il tuo spazio</strong><p>Un allenamento alla volta.</p></div><ChevronRight size={18}/></div><div className="section-head profile-section"><div><p className="eyebrow">I TUOI DATI</p><h2>Panoramica</h2></div></div><div className="profile-stat"><span>Schede create</span><strong>{plans.length}</strong></div><div className="profile-stat"><span>Esercizi programmati</span><strong>{plans.reduce((n,p)=>n+p.exercises.length,0)}</strong></div><div className="profile-note"><Sparkles size={18}/><p><strong>La costanza batte la perfezione.</strong><br/>Le tue schede sono salvate su questo dispositivo.</p></div><button className="button button-outline full" onClick={() => {localStorage.removeItem('gym-plans'); window.location.reload();}}>Ripristina schede di esempio</button><p className="version">FORMA PLANNER · VERSIONE 1.0</p></>; }
+function Profile({plans,onToast,onImport}) {
+  const picker = useRef(null);
+  function exportPlans() {
+    const blob = new Blob([JSON.stringify({ format: 'forma-backup', version: 1, exportedAt: new Date().toISOString(), plans }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `forma-schede-${new Date().toISOString().slice(0,10)}.json`; a.click(); URL.revokeObjectURL(url); onToast('Backup scaricato');
+  }
+  async function importPlans(file) {
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (data.format !== 'forma-backup' || !Array.isArray(data.plans) || !data.plans.every((p) => p && typeof p.id === 'string' && typeof p.name === 'string' && Array.isArray(p.exercises))) throw new Error('Formato non valido');
+      onImport(data.plans); onToast(`${data.plans.length} schede importate`);
+    } catch { onToast('File non valido: scegli un backup FORMA'); }
+    if (picker.current) picker.current.value = '';
+  }
+  return <><div className="page-heading"><p className="eyebrow">IL TUO ACCOUNT</p><h1>Profilo<span className="brand-dot">.</span></h1></div><div className="profile-card"><span className="profile-avatar">D</span><div><strong>Il tuo spazio</strong><p>Un allenamento alla volta.</p></div><ChevronRight size={18}/></div><div className="section-head profile-section"><div><p className="eyebrow">I TUOI DATI</p><h2>Panoramica</h2></div></div><div className="profile-stat"><span>Schede create</span><strong>{plans.length}</strong></div><div className="profile-stat"><span>Esercizi programmati</span><strong>{plans.reduce((n,p)=>n+p.exercises.length,0)}</strong></div><div className="profile-note"><Sparkles size={18}/><p><strong>Le tue schede sono salvate su questo dispositivo.</strong><br/>Per trasferirle, scarica un backup e importalo sull’altro dispositivo.</p></div><div className="backup-actions"><button className="button button-lime full" onClick={exportPlans}>Esporta backup <ArrowRight size={16}/></button><button className="button button-outline full" onClick={() => picker.current?.click()}>Importa backup</button><input ref={picker} className="hidden-file" type="file" accept="application/json,.json" onChange={(e) => importPlans(e.target.files?.[0])}/></div><button className="button button-outline full reset-button" onClick={() => {if(window.confirm('Ripristinare le schede di esempio? Le schede attuali verranno sostituite.')) {localStorage.removeItem('gym-plans'); window.location.reload();}}}>Ripristina schede di esempio</button><p className="version">FORMA PLANNER · VERSIONE 1.0</p></>;
+}
 
 export default App;
