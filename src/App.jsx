@@ -132,6 +132,7 @@ function PlanEditor({ plans, updatePlan, onStart, onBack, onToast }) {
 function WorkoutSession({ workouts, setWorkouts, onBack, onToast }) {
   const { id } = useParams(); const nav = useNavigate(); const [now, setNow] = useState(Date.now());
   const [photoPreview, setPhotoPreview] = useState(null);
+  const firstExerciseRef = useRef(null);
   const workout = workouts.find((w) => w.id === id);
   const allSets = workout?.exercises.flatMap((e) => e.sets || []) || [];
   const doneSets = allSets.filter((s) => s.done).length;
@@ -141,6 +142,7 @@ function WorkoutSession({ workouts, setWorkouts, onBack, onToast }) {
   function patchWorkout(patch) { setWorkouts((old) => old.map((w) => w.id === id ? { ...w, ...patch } : w)); }
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
   useEffect(() => { if (!workout?.restUntil) return; const delay = workout.restUntil - Date.now(); const timer = window.setTimeout(() => { patchWorkout({ restUntil: null, restPausedSeconds: 0, restAfter: null }); if (navigator.vibrate) navigator.vibrate([100, 80, 100]); }, Math.max(0, delay)); return () => window.clearTimeout(timer); }, [id, workout?.restUntil]);
+  useEffect(() => { if (workout && !workout.finishedAt) firstExerciseRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' }); }, [id]);
   useEffect(() => { if (!photoPreview) return; const closeOnEscape = (event) => { if (event.key === 'Escape') setPhotoPreview(null); }; window.addEventListener('keydown', closeOnEscape); return () => window.removeEventListener('keydown', closeOnEscape); }, [photoPreview]);
   if (!workout) return <div className="empty"><h3>Allenamento non trovato</h3><button className="button button-lime" onClick={onBack}>Torna alle schede</button></div>;
   function changeSet(eid, index, patch) { setWorkouts((old) => old.map((w) => w.id === id ? { ...w, exercises: w.exercises.map((e) => e.id === eid ? { ...e, sets: e.sets.map((s, i) => i === index ? { ...s, ...patch } : s) } : e) } : w)); }
@@ -169,7 +171,7 @@ function WorkoutSession({ workouts, setWorkouts, onBack, onToast }) {
     <div className="editor-top"><button className="back-button" onClick={() => finished ? nav('/profilo') : onBack()}><ArrowLeft size={19}/><span>{finished ? 'Profilo' : 'Scheda'}</span></button>{finished && <span className="pill session-done-pill"><Check size={12}/> COMPLETATO</span>}</div>
     <div className="editor-heading"><p className="eyebrow">{finished ? 'ALLENAMENTO SALVATO' : 'SESSIONE IN CORSO'} <span>·</span> {dateText}</p><h1>{workout.planName}<span className="brand-dot">.</span></h1><p className="editor-focus">{finished ? 'Sessione archiviata nello storico.' : 'Registra ripetizioni e carico per ogni serie.'}</p></div>
     <div className="session-progress"><div><span>PROGRESSO</span><strong>{doneSets}<small> / {allSets.length} serie</small></strong></div><div className="progress-track"><span style={{ width: `${allSets.length ? (doneSets / allSets.length) * 100 : 0}%` }}/></div></div>
-    <div className="exercise-list session-exercises">{workout.exercises.map((exercise, ei) => <article className="exercise-card session-card" key={`${exercise.id}-${ei}`}>
+    <div className="exercise-list session-exercises">{workout.exercises.map((exercise, ei) => <article ref={ei === 0 ? firstExerciseRef : undefined} className="exercise-card session-card" key={`${exercise.id}-${ei}`}>
       <div className="exercise-card-top"><span className="exercise-index">{String(ei + 1).padStart(2,'0')}</span><strong>{exercise.name}</strong><span className="session-set-count">{exercise.sets.length} serie</span></div>
       {exercise.photo && <button type="button" className="session-photo-button" onClick={() => setPhotoPreview({ src: exercise.photo, name: exercise.name })} aria-label={`Apri foto di ${exercise.name}`}><img className="session-exercise-photo" src={exercise.photo} alt={`Foto ${exercise.name}`} loading="lazy"/><span>Tocca per ingrandire</span></button>}{exercise.notes && <p className="session-exercise-note">{exercise.notes}</p>}
       <div className="session-columns"><span>SERIE</span><span>RIPETIZIONI</span><span>KG</span><span>FATTA</span></div>
