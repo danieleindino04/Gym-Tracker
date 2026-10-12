@@ -18,23 +18,32 @@ const readPlans = () => { try { return JSON.parse(localStorage.getItem('gym-plan
 const readWorkouts = () => { try { return JSON.parse(localStorage.getItem('gym-workouts')) || []; } catch { return []; } };
 const uid = () => Math.random().toString(36).slice(2, 9);
 const REST_OPTIONS = [30, 45, 60, 90, 120, 180, 300];
+function pickInProgressWorkout(workouts, plans, planId) {
+  return workouts.map((workout, index) => ({ workout, index, plan: plans.find((item) => item.id === workout.planId) }))
+    .filter(({ workout }) => !workout.finishedAt && (!planId || workout.planId === planId))
+    .map((entry) => ({ ...entry, score: entry.workout.exercises.reduce((total, exercise) => {
+      const planned = entry.plan?.exercises.find((item) => item.id === exercise.id || item.name === exercise.name);
+      return total + (exercise.sets || []).reduce((sum, set) => sum + (set.done ? 100 : 0) + (String(set.kg ?? '') !== String(planned?.kg ?? 0) ? 1 : 0) + (String(set.reps ?? '') !== String(planned?.reps || '10') ? 1 : 0), 0);
+    }, 0) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.workout;
+}
 async function compressImageBlob(blob) {
   const url = URL.createObjectURL(blob);
   try {
     const image = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url; });
-    let scale = Math.min(1, 640 / Math.max(image.width, image.height)); let quality = 0.55;
-    for (let attempt = 0; attempt < 7; attempt++) {
+    let scale = Math.min(1, 480 / Math.max(image.width, image.height)); let quality = 0.55;
+    for (let attempt = 0; attempt < 10; attempt++) {
       const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale));
       canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
       const compressed = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
-      if (compressed && compressed.size <= 80000) return await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(compressed); });
-      scale *= 0.82; quality = Math.max(0.38, quality - 0.03);
+      if (compressed && compressed.size <= 32000) return await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(compressed); });
+      scale *= 0.88; quality = Math.max(0.32, quality - 0.04);
     }
     throw new Error('Non riesco a ridurre la foto');
   } finally { URL.revokeObjectURL(url); }
 }
 async function compressPhoto(file) { if (!file?.type.startsWith('image/')) throw new Error('Scegli un file immagine'); return compressImageBlob(file); }
-async function compactStoredPhoto(photo) { try { const blob = await fetch(photo).then((response) => response.blob()); if (blob.size <= 85000) return photo; return await compressImageBlob(blob); } catch { return photo; } }
+async function compactStoredPhoto(photo) { try { const blob = await fetch(photo).then((response) => response.blob()); if (blob.size <= 38000) return photo; return await compressImageBlob(blob); } catch { return photo; } }
 
 function App() {
   const [plans, setPlans] = useState(readPlans);
@@ -74,6 +83,8 @@ function App() {
   }
   function updatePlan(id, updater) { setPlans((old) => old.map((p) => p.id === id ? updater(p) : p).filter(Boolean)); }
   function startWorkout(plan) {
+    const inProgress = pickInProgressWorkout(workoutsRef.current, plans, plan.id);
+    if (inProgress) { setToast('Riprendo l’allenamento in corso'); navigate(`/allenamento/${inProgress.id}`); return; }
     const previous = workouts.find((w) => w.planId === plan.id && w.finishedAt);
     const workout = { id: uid(), planId: plan.id, planName: plan.name, restSeconds: Number(plan.restSeconds) || 90, startedAt: new Date().toISOString(), finishedAt: null, exercises: plan.exercises.map((exercise) => { const old = previous?.exercises.find((e) => e.id === exercise.id || e.name === exercise.name); return { id: exercise.id, name: exercise.name, notes: exercise.notes || '', sets: Array.from({ length: Math.max(1, Number(exercise.sets) || 1) }, (_, i) => { const last = old?.sets[i] || old?.sets.at(-1); return { reps: String(last?.reps || exercise.reps || '10'), kg: String(last?.kg ?? exercise.kg ?? 0), done: false }; }) }; }) };
     saveWorkouts((old) => [workout, ...old]); navigate(`/allenamento/${workout.id}`);
@@ -103,7 +114,7 @@ function Home({ plans, workouts, onResume, onNew, onOpen, onToast }) {
   const [day] = useState(new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date()));
   const [selectedPlanId, setSelectedPlanId] = useState(plans[0]?.id || '');
   const featured = plans.find((plan) => plan.id === selectedPlanId) || plans[0];
-  const activeWorkout = workouts.find((w) => !w.finishedAt);
+  const activeWorkout = pickInProgressWorkout(workouts, plans);
   return <>
     <div className="greeting"><div><p className="eyebrow">{day}</p><h1>Pronto a<br/>fare progressi<span className="brand-dot">.</span></h1></div><span className="streak"><Flame size={17} fill="currentColor"/> 3</span></div>
     <section className="next-card"><div className="next-top"><span className="pill pill-dark"><span className="live-dot"/> SCEGLI LA SCHEDA</span><button className="icon-button light" onClick={() => onToast('Settimana aggiornata')} aria-label="Altre opzioni"><Ellipsis size={20}/></button></div><div className="home-plan-picker"><label htmlFor="home-plan-select">Allenamento</label><select id="home-plan-select" value={featured?.id || ''} onChange={(event) => setSelectedPlanId(event.target.value)} disabled={!plans.length}>{plans.length ? plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>) : <option value="">Nessuna scheda</option>}</select></div><div className="next-title"><div><p className="muted-light">{featured?.days || 'Inizia da qui'}</p><h2>{featured?.name || 'Crea la tua scheda'}</h2></div><div className="hero-icon"><Dumbbell size={24}/></div></div><div className="next-meta"><span><Dumbbell size={15}/>{featured?.exercises.length || 0} esercizi</span><span>·</span><span><CalendarDays size={15}/>45–60 min</span></div><button className="button button-lime full" onClick={() => featured ? onOpen(featured) : onNew()}>{featured ? 'Apri scheda' : 'Crea scheda'}<ArrowRight size={17}/></button><div className="card-glow"/></section>
