@@ -18,19 +18,23 @@ const readPlans = () => { try { return JSON.parse(localStorage.getItem('gym-plan
 const readWorkouts = () => { try { return JSON.parse(localStorage.getItem('gym-workouts')) || []; } catch { return []; } };
 const uid = () => Math.random().toString(36).slice(2, 9);
 const REST_OPTIONS = [30, 45, 60, 90, 120, 180, 300];
-async function compressPhoto(file) {
-  if (!file?.type.startsWith('image/')) throw new Error('Scegli un file immagine');
-  const url = URL.createObjectURL(file);
+async function compressImageBlob(blob) {
+  const url = URL.createObjectURL(blob);
   try {
     const image = await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => resolve(img); img.onerror = reject; img.src = url; });
-    const scale = Math.min(1, 900 / Math.max(image.width, image.height));
-    const canvas = document.createElement('canvas'); canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale);
-    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.68));
-    if (!blob || blob.size > 350000) throw new Error('Foto troppo grande');
-    return await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(blob); });
+    let scale = Math.min(1, 640 / Math.max(image.width, image.height)); let quality = 0.55;
+    for (let attempt = 0; attempt < 7; attempt++) {
+      const canvas = document.createElement('canvas'); canvas.width = Math.max(1, Math.round(image.width * scale)); canvas.height = Math.max(1, Math.round(image.height * scale));
+      canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+      const compressed = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+      if (compressed && compressed.size <= 80000) return await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(compressed); });
+      scale *= 0.82; quality = Math.max(0.38, quality - 0.03);
+    }
+    throw new Error('Non riesco a ridurre la foto');
   } finally { URL.revokeObjectURL(url); }
 }
+async function compressPhoto(file) { if (!file?.type.startsWith('image/')) throw new Error('Scegli un file immagine'); return compressImageBlob(file); }
+async function compactStoredPhoto(photo) { try { const blob = await fetch(photo).then((response) => response.blob()); if (blob.size <= 85000) return photo; return await compressImageBlob(blob); } catch { return photo; } }
 
 function App() {
   const [plans, setPlans] = useState(readPlans);
@@ -39,8 +43,19 @@ function App() {
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState('');
   const navigate = useNavigate();
-  useEffect(() => { localStorage.setItem('gym-plans', JSON.stringify(plans)); }, [plans]);
-  useEffect(() => { localStorage.setItem('gym-workouts', JSON.stringify(workouts)); }, [workouts]);
+  useEffect(() => { try { localStorage.setItem('gym-plans', JSON.stringify(plans)); } catch { setToast('Spazio foto esaurito sul dispositivo: rimuovi qualche foto e riprova'); } }, [plans]);
+  useEffect(() => { try { localStorage.setItem('gym-workouts', JSON.stringify(workouts)); } catch { setToast('Spazio esaurito sul dispositivo: libera spazio e riprova'); } }, [workouts]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const optimized = await Promise.all(plans.map(async (plan) => ({ ...plan, exercises: await Promise.all(plan.exercises.map(async (exercise) => ({ ...exercise, photo: exercise.photo ? await compactStoredPhoto(exercise.photo) : exercise.photo }))) })));
+      const cleanedWorkouts = workouts.map((workout) => ({ ...workout, exercises: workout.exercises.map(({ photo, ...exercise }) => exercise) }));
+      if (cancelled) return;
+      setPlans((current) => current.map((plan) => { const oldPlan = plans.find((item) => item.id === plan.id); const newPlan = optimized.find((item) => item.id === plan.id); if (!oldPlan || !newPlan) return plan; return { ...plan, exercises: plan.exercises.map((exercise) => { const oldExercise = oldPlan.exercises.find((item) => item.id === exercise.id); const newExercise = newPlan.exercises.find((item) => item.id === exercise.id); return oldExercise && newExercise && exercise.photo === oldExercise.photo ? { ...exercise, photo: newExercise.photo } : exercise; }) }; }));
+      setWorkouts((current) => current.map((workout) => { const cleaned = cleanedWorkouts.find((item) => item.id === workout.id); return cleaned ? { ...workout, exercises: workout.exercises.map(({ photo, ...exercise }) => exercise) } : workout; }));
+    })();
+    return () => { cancelled = true; };
+  }, []);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 2200); return () => clearTimeout(t); }, [toast]);
 
   function createPlan(name, restSeconds) {
@@ -50,7 +65,7 @@ function App() {
   function updatePlan(id, updater) { setPlans((old) => old.map((p) => p.id === id ? updater(p) : p).filter(Boolean)); }
   function startWorkout(plan) {
     const previous = workouts.find((w) => w.planId === plan.id && w.finishedAt);
-    const workout = { id: uid(), planId: plan.id, planName: plan.name, restSeconds: Number(plan.restSeconds) || 90, startedAt: new Date().toISOString(), finishedAt: null, exercises: plan.exercises.map((exercise) => { const old = previous?.exercises.find((e) => e.id === exercise.id || e.name === exercise.name); return { id: exercise.id, name: exercise.name, notes: exercise.notes || '', photo: exercise.photo || '', sets: Array.from({ length: Math.max(1, Number(exercise.sets) || 1) }, (_, i) => { const last = old?.sets[i] || old?.sets.at(-1); return { reps: String(last?.reps || exercise.reps || '10'), kg: String(last?.kg ?? exercise.kg ?? 0), done: false }; }) }; }) };
+    const workout = { id: uid(), planId: plan.id, planName: plan.name, restSeconds: Number(plan.restSeconds) || 90, startedAt: new Date().toISOString(), finishedAt: null, exercises: plan.exercises.map((exercise) => { const old = previous?.exercises.find((e) => e.id === exercise.id || e.name === exercise.name); return { id: exercise.id, name: exercise.name, notes: exercise.notes || '', sets: Array.from({ length: Math.max(1, Number(exercise.sets) || 1) }, (_, i) => { const last = old?.sets[i] || old?.sets.at(-1); return { reps: String(last?.reps || exercise.reps || '10'), kg: String(last?.kg ?? exercise.kg ?? 0), done: false }; }) }; }) };
     setWorkouts((old) => [workout, ...old]); navigate(`/allenamento/${workout.id}`);
   }
   function importBackup(data) {
@@ -64,7 +79,7 @@ function App() {
       <Route path="/" element={<Home plans={plans} workouts={workouts} onResume={(w) => navigate(`/allenamento/${w.id}`)} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
       <Route path="/schede" element={<Library plans={plans} search={search} setSearch={setSearch} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} />} />
       <Route path="/schede/:id" element={<PlanEditor plans={plans} updatePlan={updatePlan} onStart={startWorkout} onBack={() => navigate('/schede')} onToast={setToast}/>} />
-      <Route path="/allenamento/:id" element={<WorkoutSession workouts={workouts} setWorkouts={setWorkouts} onBack={() => navigate('/schede')}/>} />
+      <Route path="/allenamento/:id" element={<WorkoutSession plans={plans} workouts={workouts} setWorkouts={setWorkouts} onBack={() => navigate('/schede')}/>} />
       <Route path="/profilo" element={<Profile plans={plans} workouts={workouts} onToast={setToast} onImport={importBackup}/>} />
       <Route path="*" element={<Home plans={plans} workouts={workouts} onResume={(w) => navigate(`/allenamento/${w.id}`)} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
     </Routes></main>
@@ -129,7 +144,7 @@ function PlanEditor({ plans, updatePlan, onStart, onBack, onToast }) {
   return <><div className="editor-top"><button className="back-button" onClick={onBack}><ArrowLeft size={19}/><span>Schede</span></button><button className="icon-button" onClick={deletePlan} aria-label="Elimina scheda"><Trash2 size={18}/></button></div><div className="editor-heading"><p className="eyebrow">{plan.days.toUpperCase()} <span>·</span> {plan.exercises.length} ESERCIZI</p>{editingName ? <form className="name-form" onSubmit={(e) => {e.preventDefault(); saveName();}}><input autoFocus value={nameDraft} onChange={(e) => setNameDraft(e.target.value)}/><button className="icon-button"><Check size={18}/></button></form> : <button className="title-edit" onClick={() => setEditingName(true)}><h1>{plan.name}<span className="brand-dot">.</span></h1><span>Rinomina</span></button>}<p className="editor-focus">{plan.focus}</p></div><div className="editor-summary"><div><span>VOLUME TOTALE</span><strong>{totalSets} <small>serie</small></strong></div><div><span>TEMPO STIMATO</span><strong>{Math.max(30, plan.exercises.length * 12)} <small>min</small></strong></div><div><span>ESERCIZI</span><strong>{plan.exercises.length.toString().padStart(2,'0')}</strong></div></div><label className="rest-setting"><span><Timer size={15}/> Recupero tra le serie</span><select value={Number(plan.restSeconds) || 90} onChange={(e) => updatePlan(id, (p) => ({ ...p, restSeconds: Number(e.target.value) }))}>{REST_OPTIONS.map((seconds) => <option key={seconds} value={seconds}>{seconds >= 60 ? `${Math.floor(seconds / 60)} min${seconds % 60 ? ` ${seconds % 60} s` : ''}` : `${seconds} s`}</option>)}</select></label><div className="section-head exercise-head"><div><p className="eyebrow">IL TUO ALLENAMENTO</p><h2>Esercizi</h2></div><button className="text-action" onClick={() => setAddOpen(true)}><CirclePlus size={17}/> Aggiungi</button></div><div className="exercise-list">{plan.exercises.map((e, i) => <article className="exercise-card" key={e.id}><div className="exercise-card-top"><span className="exercise-index">{String(i + 1).padStart(2,'0')}</span><strong>{e.name}</strong><button className="mini-delete" onClick={() => removeExercise(e.id)} aria-label={`Rimuovi ${e.name}`}><X size={17}/></button></div><div className="exercise-fields"><NumberField label="SERIE" value={e.sets} onChange={(v) => changeExercise(e.id,'sets',v)} suffix="×"/><NumberField label="RIPETIZIONI" value={e.reps} onChange={(v) => changeExercise(e.id,'reps',v)} suffix="rep"/><NumberField label="CARICO" value={e.kg} onChange={(v) => changeExercise(e.id,'kg',v)} suffix="kg"/></div><ExerciseNotesPhoto exercise={e} onUpdate={(patch) => updatePlan(id, (p) => ({ ...p, exercises: p.exercises.map((item) => item.id === e.id ? { ...item, ...patch } : item) }))} onToast={onToast}/></article>)}</div>{plan.exercises.length === 0 && <div className="empty compact"><Dumbbell size={24}/><h3>Parti dal primo esercizio</h3><p>Aggiungi gli esercizi, poi imposta serie, ripetizioni e carico.</p></div>}<button className="button button-outline full add-exercise-bottom" onClick={() => setAddOpen(true)}><Plus size={17}/> Aggiungi esercizio</button><button className="button button-lime full start-workout" onClick={() => onStart(plan)}>Inizia allenamento <ArrowRight size={17}/></button>{addOpen && <AddExercise onClose={() => setAddOpen(false)} onAdd={addExercise}/>}</>;
 }
 
-function WorkoutSession({ workouts, setWorkouts, onBack, onToast }) {
+function WorkoutSession({ plans, workouts, setWorkouts, onBack, onToast }) {
   const { id } = useParams(); const nav = useNavigate(); const [now, setNow] = useState(Date.now());
   const [photoPreview, setPhotoPreview] = useState(null);
   const firstExerciseRef = useRef(null);
@@ -171,15 +186,15 @@ function WorkoutSession({ workouts, setWorkouts, onBack, onToast }) {
     <div className="editor-top"><button className="back-button" onClick={() => finished ? nav('/profilo') : onBack()}><ArrowLeft size={19}/><span>{finished ? 'Profilo' : 'Scheda'}</span></button>{finished && <span className="pill session-done-pill"><Check size={12}/> COMPLETATO</span>}</div>
     <div className="editor-heading"><p className="eyebrow">{finished ? 'ALLENAMENTO SALVATO' : 'SESSIONE IN CORSO'} <span>·</span> {dateText}</p><h1>{workout.planName}<span className="brand-dot">.</span></h1><p className="editor-focus">{finished ? 'Sessione archiviata nello storico.' : 'Registra ripetizioni e carico per ogni serie.'}</p></div>
     <div className="session-progress"><div><span>PROGRESSO</span><strong>{doneSets}<small> / {allSets.length} serie</small></strong></div><div className="progress-track"><span style={{ width: `${allSets.length ? (doneSets / allSets.length) * 100 : 0}%` }}/></div></div>
-    <div className="exercise-list session-exercises">{workout.exercises.map((exercise, ei) => <article ref={ei === 0 ? firstExerciseRef : undefined} className="exercise-card session-card" key={`${exercise.id}-${ei}`}>
+    <div className="exercise-list session-exercises">{workout.exercises.map((exercise, ei) => { const photo = exercise.photo || plans.find((plan) => plan.id === workout.planId)?.exercises.find((item) => item.id === exercise.id)?.photo; return <article ref={ei === 0 ? firstExerciseRef : undefined} className="exercise-card session-card" key={`${exercise.id}-${ei}`}>
       <div className="exercise-card-top"><span className="exercise-index">{String(ei + 1).padStart(2,'0')}</span><strong>{exercise.name}</strong><span className="session-set-count">{exercise.sets.length} serie</span></div>
-      {exercise.photo && <button type="button" className="session-photo-button" onClick={() => setPhotoPreview({ src: exercise.photo, name: exercise.name })} aria-label={`Apri foto di ${exercise.name}`}><img className="session-exercise-photo" src={exercise.photo} alt={`Foto ${exercise.name}`} loading="lazy"/><span>Tocca per ingrandire</span></button>}{exercise.notes && <p className="session-exercise-note">{exercise.notes}</p>}
+      {photo && <button type="button" className="session-photo-button" onClick={() => setPhotoPreview({ src: photo, name: exercise.name })} aria-label={`Apri foto di ${exercise.name}`}><img className="session-exercise-photo" src={photo} alt={`Foto ${exercise.name}`} loading="lazy"/><span>Tocca per ingrandire</span></button>}{exercise.notes && <p className="session-exercise-note">{exercise.notes}</p>}
       <div className="session-columns"><span>SERIE</span><span>RIPETIZIONI</span><span>KG</span><span>FATTA</span></div>
       {exercise.sets.map((set, si) => <div className="set-row-wrap" key={si}>
         <div className={`session-set ${set.done ? 'set-complete' : ''}`}><span className="set-number">{String(si + 1).padStart(2,'0')}</span><input aria-label={`Ripetizioni serie ${si + 1} ${exercise.name}`} inputMode="decimal" value={set.reps} disabled={finished} onChange={(e) => changeSet(exercise.id, si, { reps: e.target.value })}/><input aria-label={`Chilogrammi serie ${si + 1} ${exercise.name}`} inputMode="decimal" value={set.kg} disabled={finished} onChange={(e) => changeSet(exercise.id, si, { kg: e.target.value })}/><button className={`set-check ${set.done ? 'checked' : ''}`} disabled={finished} onClick={() => toggleSet(ei, si)} aria-label={set.done ? 'Segna serie da completare' : 'Segna serie completata'}>{set.done && <Check size={15}/>}</button></div>
         {restActive && workout.restAfter?.exerciseId === exercise.id && workout.restAfter?.setIndex === si && <div className="rest-inline"><Timer size={15}/><span className="rest-inline-label">Recupero</span><strong className="rest-inline-time">{mmss}</strong><div className="rest-inline-track"><span style={{ width: `${Math.max(0, Math.min(100, remaining / restTotal * 100))}%` }}/></div><button onClick={addRest} aria-label="Aggiungi 15 secondi">+15</button><button onClick={pauseOrResume} aria-label={workout.restUntil ? 'Pausa recupero' : 'Riprendi recupero'}>{workout.restUntil ? <Pause size={14}/> : <Play size={14}/>}</button><button onClick={skipRest} aria-label="Salta recupero"><SkipForward size={14}/></button></div>}
       </div>)}
-    </article>)}</div>
+    </article>; })}</div>
     {!finished ? <button className="button button-lime full finish-workout" onClick={finish}>Termina allenamento <Check size={17}/></button> : <button className="button button-outline full finish-workout" onClick={() => nav('/profilo')}>Vai allo storico</button>}
     {photoPreview && <div className="photo-lightbox" role="dialog" aria-modal="true" aria-label={`Foto ${photoPreview.name}`} onClick={() => setPhotoPreview(null)}><button type="button" className="photo-lightbox-close" aria-label="Chiudi foto" onClick={() => setPhotoPreview(null)}><X size={22}/></button><img src={photoPreview.src} alt={`Foto ingrandita ${photoPreview.name}`} onClick={(event) => event.stopPropagation()}/><span>{photoPreview.name}</span></div>}
   </>;
