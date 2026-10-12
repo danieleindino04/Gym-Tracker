@@ -130,6 +130,7 @@ function PlanEditor({ plans, updatePlan, onStart, onBack, onToast }) {
 
 function WorkoutSession({ workouts, setWorkouts, onBack, onToast }) {
   const { id } = useParams(); const nav = useNavigate(); const [now, setNow] = useState(Date.now());
+  const [photoPreview, setPhotoPreview] = useState(null);
   const workout = workouts.find((w) => w.id === id);
   const allSets = workout?.exercises.flatMap((e) => e.sets || []) || [];
   const doneSets = allSets.filter((s) => s.done).length;
@@ -139,6 +140,7 @@ function WorkoutSession({ workouts, setWorkouts, onBack, onToast }) {
   function patchWorkout(patch) { setWorkouts((old) => old.map((w) => w.id === id ? { ...w, ...patch } : w)); }
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
   useEffect(() => { if (!workout?.restUntil) return; const delay = workout.restUntil - Date.now(); const timer = window.setTimeout(() => { patchWorkout({ restUntil: null, restPausedSeconds: 0, restAfter: null }); if (navigator.vibrate) navigator.vibrate([100, 80, 100]); }, Math.max(0, delay)); return () => window.clearTimeout(timer); }, [id, workout?.restUntil]);
+  useEffect(() => { if (!photoPreview) return; const closeOnEscape = (event) => { if (event.key === 'Escape') setPhotoPreview(null); }; window.addEventListener('keydown', closeOnEscape); return () => window.removeEventListener('keydown', closeOnEscape); }, [photoPreview]);
   if (!workout) return <div className="empty"><h3>Allenamento non trovato</h3><button className="button button-lime" onClick={onBack}>Torna alle schede</button></div>;
   function changeSet(eid, index, patch) { setWorkouts((old) => old.map((w) => w.id === id ? { ...w, exercises: w.exercises.map((e) => e.id === eid ? { ...e, sets: e.sets.map((s, i) => i === index ? { ...s, ...patch } : s) } : e) } : w)); }
   function toggleSet(ei, si) {
@@ -168,7 +170,7 @@ function WorkoutSession({ workouts, setWorkouts, onBack, onToast }) {
     <div className="session-progress"><div><span>PROGRESSO</span><strong>{doneSets}<small> / {allSets.length} serie</small></strong></div><div className="progress-track"><span style={{ width: `${allSets.length ? (doneSets / allSets.length) * 100 : 0}%` }}/></div></div>
     <div className="exercise-list session-exercises">{workout.exercises.map((exercise, ei) => <article className="exercise-card session-card" key={`${exercise.id}-${ei}`}>
       <div className="exercise-card-top"><span className="exercise-index">{String(ei + 1).padStart(2,'0')}</span><strong>{exercise.name}</strong><span className="session-set-count">{exercise.sets.length} serie</span></div>
-      {exercise.photo && <img className="session-exercise-photo" src={exercise.photo} alt={`Foto ${exercise.name}`} loading="lazy"/>}{exercise.notes && <p className="session-exercise-note">{exercise.notes}</p>}
+      {exercise.photo && <button type="button" className="session-photo-button" onClick={() => setPhotoPreview({ src: exercise.photo, name: exercise.name })} aria-label={`Apri foto di ${exercise.name}`}><img className="session-exercise-photo" src={exercise.photo} alt={`Foto ${exercise.name}`} loading="lazy"/><span>Tocca per ingrandire</span></button>}{exercise.notes && <p className="session-exercise-note">{exercise.notes}</p>}
       <div className="session-columns"><span>SERIE</span><span>RIPETIZIONI</span><span>KG</span><span>FATTA</span></div>
       {exercise.sets.map((set, si) => <div className="set-row-wrap" key={si}>
         <div className={`session-set ${set.done ? 'set-complete' : ''}`}><span className="set-number">{String(si + 1).padStart(2,'0')}</span><input aria-label={`Ripetizioni serie ${si + 1} ${exercise.name}`} inputMode="decimal" value={set.reps} disabled={finished} onChange={(e) => changeSet(exercise.id, si, { reps: e.target.value })}/><input aria-label={`Chilogrammi serie ${si + 1} ${exercise.name}`} inputMode="decimal" value={set.kg} disabled={finished} onChange={(e) => changeSet(exercise.id, si, { kg: e.target.value })}/><button className={`set-check ${set.done ? 'checked' : ''}`} disabled={finished} onClick={() => toggleSet(ei, si)} aria-label={set.done ? 'Segna serie da completare' : 'Segna serie completata'}>{set.done && <Check size={15}/>}</button></div>
@@ -176,6 +178,7 @@ function WorkoutSession({ workouts, setWorkouts, onBack, onToast }) {
       </div>)}
     </article>)}</div>
     {!finished ? <button className="button button-lime full finish-workout" onClick={finish}>Termina allenamento <Check size={17}/></button> : <button className="button button-outline full finish-workout" onClick={() => nav('/profilo')}>Vai allo storico</button>}
+    {photoPreview && <div className="photo-lightbox" role="dialog" aria-modal="true" aria-label={`Foto ${photoPreview.name}`} onClick={() => setPhotoPreview(null)}><button type="button" className="photo-lightbox-close" aria-label="Chiudi foto" onClick={() => setPhotoPreview(null)}><X size={22}/></button><img src={photoPreview.src} alt={`Foto ingrandita ${photoPreview.name}`} onClick={(event) => event.stopPropagation()}/><span>{photoPreview.name}</span></div>}
   </>;
 }
 
