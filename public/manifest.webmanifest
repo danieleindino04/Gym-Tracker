@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "FORMA · Schede palestra",
+  "short_name": "FORMA",
+  "description": "Crea e organizza le tue schede di allenamento.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f5f0",
+  "theme_color": "#243427",
+  "icons": [
+    { "src": "/forma-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/forma-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
