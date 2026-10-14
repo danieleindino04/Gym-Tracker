@@ -3,9 +3,10 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 // Firebase Web config: these values identify the public client app.
+// The API key is loaded from the local Vite environment file; it is still public in the browser bundle.
 // Access to user data is protected by Firebase Authentication and Firestore Rules.
 const firebaseConfig = {
-  apiKey: 'AIzaSyBXIciMRTNeL7W1szUN8eU2NfS7HCRFZLA',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: 'gymtracker-87854.firebaseapp.com',
   projectId: 'gymtracker-87854',
   storageBucket: 'gymtracker-87854.firebasestorage.app',

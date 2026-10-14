@@ -122,6 +122,8 @@ function App() {
     const root = collection(db, 'users', user.uid, 'plans');
     const workoutsRoot = collection(db, 'users', user.uid, 'workouts');
     const photosRoot = collection(db, 'users', user.uid, 'photos');
+    let initialPlansSnapshotSkipped = false;
+    let initialWorkoutsSnapshotSkipped = false;
     (async () => {
       try {
         const [planDocs, workoutDocs, photoDocs] = await Promise.all([getDocs(root), getDocs(workoutsRoot), getDocs(photosRoot)]);
@@ -154,6 +156,7 @@ function App() {
     function refreshPlans(snapshot) {
       latestPlanSnapshot = snapshot;
       if (!active || cloudReadyRef.current !== user.uid) return;
+      if (!initialPlansSnapshotSkipped) { initialPlansSnapshotSkipped = true; return; }
       getDocs(photosRoot).then((photoSnapshot) => {
         if (!active) return;
         const photos = Object.fromEntries(photoSnapshot.docs.map((item) => [item.id, item.data().photo]));
@@ -165,6 +168,7 @@ function App() {
     const unsubPhotos = onSnapshot(photosRoot, () => { if (latestPlanSnapshot) refreshPlans(latestPlanSnapshot); }, (error) => setAuthError(firebaseMessage(error)));
     const unsubWorkouts = onSnapshot(workoutsRoot, (snapshot) => {
       if (!active || cloudReadyRef.current !== user.uid) return;
+      if (!initialWorkoutsSnapshotSkipped) { initialWorkoutsSnapshotSkipped = true; return; }
       const incoming = snapshot.docs.map((item) => normalizeWorkout({ ...item.data(), id: item.id })).filter(Boolean).sort((a, b) => (a.position ?? 0) - (b.position ?? 0)).map(({ position, ...workout }) => workout);
       setWorkouts((current) => stableStringify(current) === stableStringify(incoming) ? current : incoming);
       workoutsRef.current = incoming;
