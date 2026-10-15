@@ -244,6 +244,7 @@ function App() {
 
 function Home({ userId, plans, workouts, onResume, onStart, onNew, onOpen }) {
   const [day] = useState(new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date()));
+  useEffect(() => { window.scrollTo(0, 0); }, []);
   const orderedPlans = [...plans].sort((a, b) => { const aDay = Number(a.name.match(/giorno\s*(\d+)/i)?.[1] ?? Number.MAX_SAFE_INTEGER); const bDay = Number(b.name.match(/giorno\s*(\d+)/i)?.[1] ?? Number.MAX_SAFE_INTEGER); return aDay - bDay; });
   const [selectedPlanId, setSelectedPlanId] = useState(orderedPlans[0]?.id || '');
   const [selectedFavoriteIds, setSelectedFavoriteIds] = useState([]);
