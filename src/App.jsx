@@ -63,15 +63,6 @@ const readWorkouts = () => { try { const value = JSON.parse(localStorage.getItem
 const uid = () => Math.random().toString(36).slice(2, 9);
 const REST_OPTIONS = [30, 45, 60, 90, 120, 180, 300];
 const stableStringify = (value) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map((key) => [key, item[key]])) : item);
-function pickInProgressWorkout(workouts, plans, planId) {
-  return workouts.map((workout, index) => ({ workout, index, plan: plans.find((item) => item.id === workout.planId) }))
-    .filter(({ workout }) => !workout.finishedAt && (!planId || workout.planId === planId))
-    .map((entry) => ({ ...entry, score: entry.workout.exercises.reduce((total, exercise) => {
-      const planned = entry.plan?.exercises.find((item) => item.id === exercise.id || item.name === exercise.name);
-      return total + (exercise.sets || []).reduce((sum, set) => sum + (set.done ? 100 : 0) + (String(set.kg ?? '') !== String(planned?.kg ?? 0) ? 1 : 0) + (String(set.reps ?? '') !== String(planned?.reps || '10') ? 1 : 0), 0);
-    }, 0) }))
-    .sort((a, b) => b.score - a.score || a.index - b.index)[0]?.workout;
-}
 async function compressImageBlob(blob) {
   const url = URL.createObjectURL(blob);
   try {
@@ -224,10 +215,8 @@ function App() {
   }
   function updatePlan(id, updater) { setPlans((old) => old.map((p) => p.id === id ? updater(p) : p).filter(Boolean)); }
   function startWorkout(plan) {
-    const inProgress = pickInProgressWorkout(workoutsRef.current, plans, plan.id);
-    if (inProgress) { setToast('Riprendo l’allenamento in corso'); navigate(`/allenamento/${inProgress.id}`); return; }
     const previous = workouts.find((w) => w.planId === plan.id && w.finishedAt);
-    const workout = { id: uid(), planId: plan.id, planName: plan.name, restSeconds: Number(plan.restSeconds) || 90, startedAt: new Date().toISOString(), finishedAt: null, exercises: plan.exercises.map((exercise) => { const old = previous?.exercises.find((e) => e.id === exercise.id || e.name === exercise.name); return { id: exercise.id, name: exercise.name, notes: exercise.notes || '', sets: Array.from({ length: Math.max(1, Number(exercise.sets) || 1) }, (_, i) => { const last = old?.sets[i] || old?.sets.at(-1); return { reps: String(last?.reps || exercise.reps || '10'), kg: String(last?.kg ?? exercise.kg ?? 0), done: false }; }) }; }) };
+    const workout = { id: uid(), planId: plan.id, planName: plan.name, restSeconds: Number(plan.restSeconds) || 90, startedAt: new Date().toISOString(), finishedAt: null, resumeAvailable: true, exercises: plan.exercises.map((exercise) => { const old = previous?.exercises.find((e) => e.id === exercise.id || e.name === exercise.name); return { id: exercise.id, name: exercise.name, notes: exercise.notes || '', sets: Array.from({ length: Math.max(1, Number(exercise.sets) || 1) }, (_, i) => { const last = old?.sets[i] || old?.sets.at(-1); return { reps: String(last?.reps || exercise.reps || '10'), kg: String(last?.kg ?? exercise.kg ?? 0), done: false }; }) }; }) };
     saveWorkouts((old) => [workout, ...old]); navigate(`/allenamento/${workout.id}`);
   }
   function importBackup(data) {
@@ -240,12 +229,12 @@ function App() {
   return <div className={`app-shell ${darkMode ? 'dark-mode' : ''}`}>
     <header className="topbar"><a className="brand" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}><span className="brand-mark"><Dumbbell size={18}/></span><span>FORMA<span className="brand-dot">.</span></span></a><button className="avatar" onClick={() => navigate('/profilo')} aria-label="Apri profilo">{(user.displayName || user.email || 'U')[0].toUpperCase()}</button></header>
     <main className="main-content"><Routes>
-      <Route path="/" element={<Home userId={user.uid} plans={plans} onStart={startWorkout} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
+      <Route path="/" element={<Home userId={user.uid} plans={plans} workouts={workouts} onResume={(workout) => navigate(`/allenamento/${workout.id}`)} onStart={startWorkout} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
       <Route path="/schede" element={<Library plans={plans} search={search} setSearch={setSearch} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} />} />
       <Route path="/schede/:id" element={<PlanEditor plans={plans} updatePlan={updatePlan} onStart={startWorkout} onBack={() => navigate('/schede')} onToast={setToast}/>} />
       <Route path="/allenamento/:id" element={<WorkoutSession plans={plans} workouts={workouts} setWorkouts={saveWorkouts} onBack={() => navigate('/schede')}/>} />
       <Route path="/profilo" element={<Profile plans={plans} workouts={workouts} onToast={setToast} onImport={importBackup} darkMode={darkMode} onToggleDarkMode={setDarkMode} user={user} onLogout={() => signOut(auth)}/>} />
-      <Route path="*" element={<Home userId={user.uid} plans={plans} onStart={startWorkout} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
+      <Route path="*" element={<Home userId={user.uid} plans={plans} workouts={workouts} onResume={(workout) => navigate(`/allenamento/${workout.id}`)} onStart={startWorkout} onNew={() => setShowNew(true)} onOpen={(p) => navigate(`/schede/${p.id}`)} onToast={setToast}/>} />
     </Routes></main>
     <nav className="bottom-nav"><NavLink to="/" end><Activity size={19}/><span>Oggi</span></NavLink><NavLink to="/schede"><Dumbbell size={19}/><span>Schede</span></NavLink><NavLink to="/profilo"><Settings2 size={19}/><span>Profilo</span></NavLink></nav>
     {showNew && <NewPlan onClose={() => setShowNew(false)} onCreate={createPlan}/>}
@@ -253,7 +242,7 @@ function App() {
   </div>;
 }
 
-function Home({ userId, plans, onStart, onNew, onOpen }) {
+function Home({ userId, plans, workouts, onResume, onStart, onNew, onOpen }) {
   const [day] = useState(new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date()));
   const orderedPlans = [...plans].sort((a, b) => { const aDay = Number(a.name.match(/giorno\s*(\d+)/i)?.[1] ?? Number.MAX_SAFE_INTEGER); const bDay = Number(b.name.match(/giorno\s*(\d+)/i)?.[1] ?? Number.MAX_SAFE_INTEGER); return aDay - bDay; });
   const [selectedPlanId, setSelectedPlanId] = useState(orderedPlans[0]?.id || '');
@@ -264,6 +253,13 @@ function Home({ userId, plans, onStart, onNew, onOpen }) {
   const [favoriteSettingsLoaded, setFavoriteSettingsLoaded] = useState(false);
   const [ptEmail, setPtEmail] = useState('');
   const featured = plans.find((plan) => plan.id === selectedPlanId) || plans[0];
+  const latestWorkoutsByPlan = new Map();
+  [...workouts].sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt)).forEach((workout) => {
+    if (!latestWorkoutsByPlan.has(workout.planId)) latestWorkoutsByPlan.set(workout.planId, workout);
+  });
+  const resumableWorkout = [...latestWorkoutsByPlan.values()].find((workout) => !workout.finishedAt && workout.resumeAvailable !== false);
+  const resumableSets = resumableWorkout?.exercises.flatMap((exercise) => exercise.sets || []) || [];
+  const resumableDoneSets = resumableSets.filter((set) => set.done).length;
   useEffect(() => {
     setFavoriteSettingsLoaded(false);
     const settingsRef = doc(db, 'users', userId, 'settings', 'home-exercises');
@@ -315,7 +311,8 @@ function Home({ userId, plans, onStart, onNew, onOpen }) {
     window.open(`https://mail.google.com/mail/?${params.toString()}`, '_blank', 'noopener,noreferrer');
   }
   return <>
-    <div className="greeting"><div><p className="eyebrow">{day}</p><h1 className="quote-line">Se qualcosa sta in mezzo fra te ed il successo, spostalo</h1></div></div>
+    <div className="greeting"><div><p className="eyebrow home-date">{day}</p><h1 className="quote-line">Se qualcosa sta in mezzo fra te ed il successo, spostalo</h1></div></div>
+    {resumableWorkout && <section className="resume-workout-bar"><div className="resume-workout-copy"><span className="resume-workout-indicator"><Activity size={17}/></span><div><strong>{resumableWorkout.planName}</strong><small>{resumableDoneSets}/{resumableSets.length} serie completate</small></div></div><button type="button" className="button button-lime" onClick={() => onResume(resumableWorkout)}>Riprendi allenamento <ArrowRight size={16}/></button></section>}
     <section className="next-card"><div className="next-top"><span className="pill pill-dark"><span className="live-dot"/> SCEGLI LA SCHEDA</span></div><div className="home-plan-picker"><span className="home-plan-label">Le tue schede</span><div className="home-plan-grid">{orderedPlans.length ? orderedPlans.map((plan) => <button key={plan.id} type="button" className={`home-plan-tile${featured?.id === plan.id ? ' selected' : ''}`} aria-pressed={featured?.id === plan.id} onClick={() => setSelectedPlanId(plan.id)}><span className="home-plan-tile-icon"><Dumbbell size={19}/></span><strong>{plan.name}</strong><span className="home-plan-tile-count">{plan.exercises.length} esercizi</span></button>) : <p className="home-plan-empty">Crea una scheda per iniziare.</p>}</div></div><button className="button button-lime full" onClick={() => featured ? onStart(featured) : onNew()}>{featured ? 'INIZIA ALLENAMENTO' : 'Crea scheda'}<ArrowRight size={17}/></button><div className="card-glow"/></section>
     <section className="favorites-section">
       <div className="section-head"><div><p className="eyebrow">LA TUA SELEZIONE</p><h2>Esercizi preferiti da selezionare</h2></div></div>
@@ -372,12 +369,15 @@ function WorkoutSession({ plans, workouts, setWorkouts, onBack, onToast }) {
   const allSets = workout?.exercises.flatMap((e) => e.sets || []) || [];
   const doneSets = allSets.filter((s) => s.done).length;
   const finished = Boolean(workout?.finishedAt);
+  const firstIncompleteExercise = workout?.exercises.find((exercise) => (exercise.sets || []).some((set) => !set.done));
+  const activeExercise = workout?.exercises.find((exercise) => exercise.id === workout.activeExerciseId) || firstIncompleteExercise || workout?.exercises[0];
+  const activeExerciseIndex = Math.max(0, workout?.exercises.findIndex((exercise) => exercise.id === activeExercise?.id) ?? 0);
   const remaining = workout?.restUntil ? Math.max(0, Math.ceil((workout.restUntil - now) / 1000)) : (workout?.restPausedSeconds || 0);
   const restActive = !finished && Boolean(workout?.restAfter && (workout.restUntil || workout.restPausedSeconds));
   function patchWorkout(patch) { setWorkouts((old) => old.map((w) => w.id === id ? { ...w, ...patch } : w)); }
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
   useEffect(() => { if (!workout?.restUntil) return; const delay = workout.restUntil - Date.now(); const timer = window.setTimeout(() => { patchWorkout({ restUntil: null, restPausedSeconds: 0, restAfter: null }); if (navigator.vibrate) navigator.vibrate([100, 80, 100]); }, Math.max(0, delay)); return () => window.clearTimeout(timer); }, [id, workout?.restUntil]);
-  useEffect(() => { if (workout && !workout.finishedAt) firstExerciseRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' }); }, [id]);
+  useEffect(() => { if (workout && !workout.finishedAt) firstExerciseRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }); }, [id, activeExercise?.id]);
   useEffect(() => { if (!photoPreview) return; const closeOnEscape = (event) => { if (event.key === 'Escape') setPhotoPreview(null); }; window.addEventListener('keydown', closeOnEscape); return () => window.removeEventListener('keydown', closeOnEscape); }, [photoPreview]);
   if (!workout) return <div className="empty"><h3>Allenamento non trovato</h3><button className="button button-lime" onClick={onBack}>Torna alle schede</button></div>;
   function changeSet(eid, index, patch) { setWorkouts((old) => old.map((w) => w.id === id ? { ...w, exercises: w.exercises.map((e) => e.id === eid ? { ...e, sets: e.sets.map((s, i) => i === index ? { ...s, ...patch } : s) } : e) } : w)); }
@@ -388,7 +388,9 @@ function WorkoutSession({ plans, workouts, setWorkouts, onBack, onToast }) {
       if (!exercise?.sets[si]) return current;
       const wasDone = exercise.sets[si].done;
       const nextSets = exercise.sets.map((set, index) => index === si ? { ...set, done: !set.done } : set);
-      const next = { ...current, exercises: current.exercises.map((item, index) => index === ei ? { ...item, sets: nextSets } : item) };
+      const exerciseComplete = nextSets.every((set) => set.done);
+      const nextExercise = exerciseComplete ? current.exercises.find((item, index) => index !== ei && item.sets.some((set) => !set.done)) : null;
+      const next = { ...current, activeExerciseId: nextExercise?.id || (exerciseComplete ? null : exercise.id), exercises: current.exercises.map((item, index) => index === ei ? { ...item, sets: nextSets } : item) };
       const isLastSet = ei === current.exercises.length - 1 && si === exercise.sets.length - 1;
       if (!wasDone && !isLastSet) { const seconds = Number(current.restSeconds) || 90; next.restUntil = Date.now() + seconds * 1000; next.restPausedSeconds = 0; next.restDurationSeconds = seconds; next.restAfter = { exerciseId: exercise.id, setIndex: si }; }
       else if (wasDone && current.restAfter?.exerciseId === exercise.id && current.restAfter?.setIndex === si) { next.restUntil = null; next.restPausedSeconds = 0; next.restAfter = null; }
@@ -403,7 +405,8 @@ function WorkoutSession({ plans, workouts, setWorkouts, onBack, onToast }) {
   function skipRest() { patchWorkout({ restUntil: null, restPausedSeconds: 0, restAfter: null }); }
   function finish() {
     if (doneSets < allSets.length && !window.confirm(`Hai completato ${doneSets} serie su ${allSets.length}. Terminare comunque l’allenamento?`)) return;
-    setWorkouts((old) => old.map((w) => w.id === id ? { ...w, finishedAt: new Date().toISOString(), restUntil: null, restPausedSeconds: 0, restAfter: null } : w));
+    setWorkouts((old) => old.map((w) => w.id === id ? { ...w, finishedAt: new Date().toISOString(), resumeAvailable: false, restUntil: null, restPausedSeconds: 0, restAfter: null } : !w.finishedAt ? { ...w, resumeAvailable: false } : w));
+    nav('/');
   }
   const dateText = new Intl.DateTimeFormat('it-IT', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }).format(new Date(workout.startedAt));
   const mmss = `${String(Math.floor(remaining / 60)).padStart(2, '0')}:${String(remaining % 60).padStart(2, '0')}`;
@@ -412,14 +415,17 @@ function WorkoutSession({ plans, workouts, setWorkouts, onBack, onToast }) {
     <div className="editor-top"><button className="back-button" onClick={() => finished ? nav('/profilo') : onBack()}><ArrowLeft size={19}/><span>{finished ? 'Profilo' : 'Scheda'}</span></button>{finished && <span className="pill session-done-pill"><Check size={12}/> COMPLETATO</span>}</div>
     <div className="editor-heading"><p className="eyebrow">{finished ? 'ALLENAMENTO SALVATO' : 'SESSIONE IN CORSO'} <span>·</span> {dateText}</p><h1>{workout.planName}<span className="brand-dot">.</span></h1><p className="editor-focus">{finished ? 'Sessione archiviata nello storico.' : 'Registra ripetizioni e carico per ogni serie.'}</p></div>
     <div className="session-progress"><div><span>PROGRESSO</span><strong>{doneSets}<small> / {allSets.length} serie</small></strong></div><div className="progress-track progress-segments" role="progressbar" aria-label="Progresso allenamento" aria-valuemin={0} aria-valuemax={allSets.length} aria-valuenow={doneSets} style={{ gridTemplateColumns: `repeat(${Math.max(1, allSets.length)}, minmax(0, 1fr))` }}>{allSets.map((set, index) => <span key={index} className={set.done ? 'complete' : ''}/>)}</div></div>
-    <div className="exercise-list session-exercises">{workout.exercises.map((exercise, ei) => { const photo = exercise.photo || plans.find((plan) => plan.id === workout.planId)?.exercises.find((item) => item.id === exercise.id)?.photo; return <article ref={ei === 0 ? firstExerciseRef : undefined} className="exercise-card session-card" key={`${exercise.id}-${ei}`}>
-      <div className="exercise-card-top"><span className="exercise-index">{String(ei + 1).padStart(2,'0')}</span><strong>{exercise.name}</strong><span className="session-set-count">{exercise.sets.length} serie</span></div>
+    {restActive && workout.restAfter?.exerciseId !== activeExercise?.id && <div className="rest-inline session-rest-floating"><Timer size={15}/><span className="rest-inline-label">Recupero</span><strong className="rest-inline-time">{mmss}</strong><div className="rest-inline-track"><span style={{ width: `${Math.max(0, Math.min(100, remaining / restTotal * 100))}%` }}/></div><button onClick={addRest} aria-label="Aggiungi 15 secondi">+15</button><button onClick={pauseOrResume} aria-label={workout.restUntil ? 'Pausa recupero' : 'Riprendi recupero'}>{workout.restUntil ? <Pause size={14}/> : <Play size={14}/>}</button><button onClick={skipRest} aria-label="Salta recupero"><SkipForward size={14}/></button></div>}
+    <div className="exercise-list session-exercises">{workout.exercises.map((exercise, ei) => { const photo = exercise.photo || plans.find((plan) => plan.id === workout.planId)?.exercises.find((item) => item.id === exercise.id)?.photo; const exerciseDone = exercise.sets.length > 0 && exercise.sets.every((set) => set.done); const expanded = finished || (!finished && ei === activeExerciseIndex && (!exerciseDone || workout.activeExerciseId === exercise.id)); const canOpen = !finished && !exerciseDone && !expanded; const reopenExercise = (event) => { event.stopPropagation(); patchWorkout({ activeExerciseId: exercise.id }); }; const completedKg = exercise.sets.map((set) => Number(set.kg)).filter(Number.isFinite); const kgSummary = completedKg.length ? `${Math.min(...completedKg)}–${Math.max(...completedKg)} kg` : ''; return <article ref={ei === activeExerciseIndex ? firstExerciseRef : undefined} className={`exercise-card session-card ${exerciseDone ? 'session-card-complete' : !expanded ? 'session-card-collapsed' : ''}`} key={`${exercise.id}-${ei}`} onClick={canOpen ? () => patchWorkout({ activeExerciseId: exercise.id }) : undefined} onKeyDown={canOpen ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); patchWorkout({ activeExerciseId: exercise.id }); } } : undefined} role={canOpen ? 'button' : undefined} tabIndex={canOpen ? 0 : undefined}>
+      <div className="exercise-card-top"><span className="exercise-index">{String(ei + 1).padStart(2,'0')}</span><strong>{exercise.name}</strong>{exerciseDone ? photo ? <span className="session-set-count">{exercise.sets.length}/{exercise.sets.length} serie</span> : <button type="button" className="session-complete-mark" aria-label={`Riapri ${exercise.name}`} onClick={reopenExercise}><Check size={17}/></button> : <span className="session-set-count">{exercise.sets.filter((set) => set.done).length}/{exercise.sets.length} serie</span>}</div>
+      {!expanded ? <><div className="session-collapsed-content">{photo && <div className="session-collapsed-photo"><img src={photo} alt={`Foto ${exercise.name}`} loading="lazy"/>{exerciseDone && <button type="button" aria-label={`Riapri ${exercise.name}`} onClick={reopenExercise}><Check size={22}/></button>}</div>}<div className="session-collapsed-summary">{exerciseDone ? <><strong>{exercise.sets.length} serie · {exercise.sets[0]?.reps} rip{kgSummary ? ` · ${kgSummary}` : ''}</strong><small>Esercizio completato</small></> : <strong>{exercise.sets.filter((set) => set.done).length} di {exercise.sets.length} serie completate</strong>}</div></div></> : <>
       {photo && <button type="button" className="session-photo-button" onClick={() => setPhotoPreview({ src: photo, name: exercise.name })} aria-label={`Apri foto di ${exercise.name}`}><img className="session-exercise-photo" src={photo} alt={`Foto ${exercise.name}`} loading="lazy"/><span>Tocca per ingrandire</span></button>}{exercise.notes && <p className="session-exercise-note">{exercise.notes}</p>}
       <div className="session-columns"><span>SERIE</span><span>RIPETIZIONI</span><span>KG</span><span>FATTA</span></div>
       {exercise.sets.map((set, si) => <div className="set-row-wrap" key={si}>
         <div className={`session-set ${set.done ? 'set-complete' : ''}`}><span className="set-number">{String(si + 1).padStart(2,'0')}</span><input aria-label={`Ripetizioni serie ${si + 1} ${exercise.name}`} inputMode="decimal" value={set.reps} disabled={finished} onChange={(e) => changeSet(exercise.id, si, { reps: e.target.value })}/><input aria-label={`Chilogrammi serie ${si + 1} ${exercise.name}`} inputMode="decimal" value={set.kg} disabled={finished} onChange={(e) => changeSet(exercise.id, si, { kg: e.target.value })}/><button className={`set-check ${set.done ? 'checked' : ''}`} disabled={finished} aria-pressed={set.done} style={{ backgroundColor: set.done ? '#c9ef58' : '#fff', borderColor: set.done ? '#c9ef58' : '#dfe3d6' }} onClick={() => toggleSet(ei, si)} aria-label={set.done ? 'Segna serie da completare' : 'Segna serie completata'}>{set.done ? <Check size={14}/> : <span className="set-check-circle"/>}<span className="set-check-label">{set.done ? 'Fatta' : 'Segna'}</span></button></div>
-        {restActive && workout.restAfter?.exerciseId === exercise.id && workout.restAfter?.setIndex === si && <div className="rest-inline"><Timer size={15}/><span className="rest-inline-label">Recupero</span><strong className="rest-inline-time">{mmss}</strong><div className="rest-inline-track"><span style={{ width: `${Math.max(0, Math.min(100, remaining / restTotal * 100))}%` }}/></div><button onClick={addRest} aria-label="Aggiungi 15 secondi">+15</button><button onClick={pauseOrResume} aria-label={workout.restUntil ? 'Pausa recupero' : 'Riprendi recupero'}>{workout.restUntil ? <Pause size={14}/> : <Play size={14}/>}</button><button onClick={skipRest} aria-label="Salta recupero"><SkipForward size={14}/></button></div>}
+        {restActive && activeExercise?.id === exercise.id && workout.restAfter?.exerciseId === exercise.id && workout.restAfter?.setIndex === si && <div className="rest-inline"><Timer size={15}/><span className="rest-inline-label">Recupero</span><strong className="rest-inline-time">{mmss}</strong><div className="rest-inline-track"><span style={{ width: `${Math.max(0, Math.min(100, remaining / restTotal * 100))}%` }}/></div><button onClick={addRest} aria-label="Aggiungi 15 secondi">+15</button><button onClick={pauseOrResume} aria-label={workout.restUntil ? 'Pausa recupero' : 'Riprendi recupero'}>{workout.restUntil ? <Pause size={14}/> : <Play size={14}/>}</button><button onClick={skipRest} aria-label="Salta recupero"><SkipForward size={14}/></button></div>}
       </div>)}
+      </>}
     </article>; })}</div>
     {!finished ? <button className="button button-lime full finish-workout" onClick={finish}>Termina allenamento <Check size={17}/></button> : <button className="button button-outline full finish-workout" onClick={() => nav('/profilo')}>Vai allo storico</button>}
     {photoPreview && <div className="photo-lightbox" role="dialog" aria-modal="true" aria-label={`Foto ${photoPreview.name}`} onClick={() => setPhotoPreview(null)}><button type="button" className="photo-lightbox-close" aria-label="Chiudi foto" onClick={() => setPhotoPreview(null)}><X size={22}/></button><img src={photoPreview.src} alt={`Foto ingrandita ${photoPreview.name}`} onClick={(event) => event.stopPropagation()}/><span>{photoPreview.name}</span></div>}
